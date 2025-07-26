@@ -42,10 +42,15 @@ interface LogEntry {
 export class VCP {
   private ws?: WebSocket;
   private messageHandler: OcppMessageHandler;
+  private heartbeatInterval?: NodeJS.Timeout;
 
   private isFinishing = false;
 
   transactionManager = new TransactionManager();
+
+  get chargePointId(): string {
+    return this.vcpOptions.chargePointId;
+  }
 
   constructor(private vcpOptions: VCPOptions) {
     this.messageHandler = resolveMessageHandler(vcpOptions.ocppVersion);
@@ -158,9 +163,24 @@ export class VCP {
   }
 
   configureHeartbeat(interval: number) {
-    setInterval(() => {
-      this.send(heartbeatOcppMessage.request({}));
+    // Clear any existing heartbeat interval
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+    
+    this.heartbeatInterval = setInterval(() => {
+      // Only send heartbeat if WebSocket is still connected
+      if (this.ws && !this.isFinishing) {
+        this.send(heartbeatOcppMessage.request({}));
+      }
     }, interval);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = undefined;
+    }
   }
 
   close() {
@@ -170,9 +190,13 @@ export class VCP {
       );
     }
     this.isFinishing = true;
+    
+    // Stop heartbeat before closing WebSocket
+    this.stopHeartbeat();
+    
     this.ws.close();
     this.ws = undefined;
-    process.exit(1);
+    // Removed process.exit() to allow multiple VCP instances to run independently
   }
 
   async getDiagnosticData(): Promise<LogEntry[]> {
@@ -258,7 +282,11 @@ export class VCP {
     if (this.isFinishing) {
       return;
     }
+    
+    // Stop heartbeat on unexpected connection close
+    this.stopHeartbeat();
+    
     logger.info(`Connection closed. code=${code}, reason=${reason}`);
-    process.exit();
+    // Removed process.exit() to allow multiple VCP instances to run independently
   }
 }

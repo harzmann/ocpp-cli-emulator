@@ -26,7 +26,7 @@ async function simulateCharging() {
   // Send BootNotification
   vcp.send(
     bootNotificationOcppMessage.request({
-      chargePointVendor: "Solidstudio",
+      chargePointVendor: "eh-systemhaus",
       chargePointModel: "VirtualCP-S001", // Max 20 chars
       chargePointSerialNumber: "S001-001",
       firmwareVersion: "1.0.0",
@@ -55,7 +55,6 @@ async function simulateCharging() {
   await setTimeout(2000);
 
   // Simulate transaction start
-  const transactionId = 1; // OCPP 1.6 uses numeric transaction IDs
   const idTag = "test-idtag";
   const connectorId = 1;
   const evseId = 1;
@@ -71,7 +70,7 @@ async function simulateCharging() {
   );
   console.log("🔌 Status: Preparing (EV plugged in)");
 
-  // Start Transaction
+  // Start Transaction - Backend will provide the TransactionID in response
   vcp.send(
     startTransactionOcppMessage.request({
       connectorId: connectorId,
@@ -81,61 +80,63 @@ async function simulateCharging() {
     })
   );
 
-  // Start transaction with automatic meter values
-  vcp.transactionManager.startTransaction(vcp, {
-    transactionId,
-    idTag,
-    connectorId,
-    evseId,
-    meterValuesCallback: async (transactionState) => {
-      // Send periodic meter values via MeterValues
-      vcp.send(
-        meterValuesOcppMessage.request({
-          connectorId: connectorId,
-          transactionId: transactionId,
-          meterValue: [
-            {
-              timestamp: new Date().toISOString(),
-              sampledValue: [
-                {
-                  value: (transactionState.meterValue / 1000).toString(),
-                  measurand: "Energy.Active.Import.Register",
-                  unit: "kWh",
-                },
-                {
-                  value: (Math.random() * 2 + 10).toFixed(1),
-                  measurand: "Power.Active.Import",
-                  unit: "kW",
-                },
-              ],
-            },
-          ],
-        })
-      );
-      console.log(
-        `⚡ MeterValue: ${transactionState.meterValue} Wh, Power: ${(Math.random() * 2 + 10).toFixed(1)} kW at ${new Date().toISOString()}`
-      );
-    },
-  });
+  // Wait a moment for transaction to start, then send Charging status
+  await setTimeout(1000);
+  vcp.send(
+    statusNotificationOcppMessage.request({
+      connectorId,
+      errorCode: "NoError", 
+      status: "Charging",
+      timestamp: new Date().toISOString(),
+    })
+  );
+  console.log("🔋 Status: Charging");
 
-  console.log("🔋 Charging started - Transaction running for 5 minutes");
+  console.log("\n� ═══════════════════════════════════════════");
+  console.log("�🔋 CHARGING SESSION STARTED");
+  console.log("🚗 ═══════════════════════════════════════════");
+  console.log("⏱️  Duration: 5 minutes");
+  console.log("📡 TransactionID will be provided by backend");
+  console.log("📊 MeterValues sent every 15 seconds with:");
+  console.log("   • Energy.Active.Import.Register (kWh)");
+  console.log("   • Power.Active.Import (kW)");
+  console.log("   • Voltage (V)");
+  console.log("   • Current.Import (A)");
+  console.log("   • Temperature (Celsius)");
+  console.log("🚗 ═══════════════════════════════════════════\n");
   
   // Simulate charging for 5 minutes
   await setTimeout(5 * 60 * 1000);
 
-  // Send Transaction Ended event
-  const finalMeterValue = vcp.transactionManager.getMeterValue(transactionId);
-  vcp.send(
-    stopTransactionOcppMessage.request({
-      transactionId: transactionId,
-      meterStop: Math.floor(finalMeterValue),
-      timestamp: new Date().toISOString(),
-    })
-  );
+  // Note: In a real implementation, you would need to track the transactionId from the StartTransaction response
+  // For this simulation, we'll stop all active transactions
+  const activeTransactions = Array.from(vcp.transactionManager.transactions.keys());
+  
+  if (activeTransactions.length > 0) {
+    const transactionId = activeTransactions[0]; // Get the first active transaction
+    
+    // Send StopTransaction
+    const finalMeterValue = vcp.transactionManager.getMeterValue(transactionId);
+    vcp.send(
+      stopTransactionOcppMessage.request({
+        transactionId: typeof transactionId === 'number' ? transactionId : parseInt(transactionId.toString()),
+        meterStop: Math.floor(finalMeterValue),
+        timestamp: new Date().toISOString(),
+      })
+    );
 
-  // Stop the transaction
-  vcp.transactionManager.stopTransaction(transactionId);
-  console.log("⏹️ Charging stopped");
+    // Stop the transaction
+    vcp.transactionManager.stopTransaction(transactionId);
+    console.log("\n🛑 ═══════════════════════════════════════════");
+    console.log("⏹️  CHARGING SESSION COMPLETED");
+    console.log("🛑 ═══════════════════════════════════════════");
+    console.log(`📊 Total energy consumed: ${(finalMeterValue / 1000).toFixed(2)} kWh`);
+    console.log(`⏱️  Session duration: 5 minutes`);
+    console.log(`📈 Final TransactionID: ${transactionId}`);
+    console.log("🛑 ═══════════════════════════════════════════\n");
+  } else {
+    console.log("⚠️ No active transactions found to stop");
+  }
 
   // Status: Available (EV unplugged)
   vcp.send(
@@ -147,11 +148,17 @@ async function simulateCharging() {
     })
   );
   console.log("🟢 Status: Available (EV unplugged)");
-  console.log(`📊 Total energy consumed: ${(finalMeterValue / 1000).toFixed(2)} kWh`);
 
   // Clean up heartbeat interval
   clearInterval(heartbeatInterval);
-  console.log("🏁 Simulation completed");
+  
+  // Wait a moment for the last messages to be sent
+  await setTimeout(2000);
+  
+  console.log("🔌 Closing WebSocket connection and exiting...");
+  
+  // Close WebSocket connection cleanly (this will also exit the program)
+  vcp.close();
 }
 
 simulateCharging().catch(console.error);
